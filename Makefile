@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs logs-backend logs-frontend logs-db logs-redis shell-backend shell-frontend shell-redis migrate makemigrations createsuperuser test test-backend test-frontend clean clean-all ps health check install-hooks uninstall-hooks format lint status seed backup restore
+.PHONY: help build up down restart logs logs-backend logs-frontend logs-db logs-redis logs-prometheus logs-grafana shell-backend shell-frontend shell-redis migrate makemigrations createsuperuser test test-backend test-frontend clean clean-all ps health check install-hooks uninstall-hooks format lint status seed backup restore open-grafana open-prometheus
 
 # Colors for output
 BLUE := \033[0;34m
@@ -69,6 +69,8 @@ status: ## Show detailed status of all services
 	@echo "  $(GREEN)Django Admin:$(NC)     http://localhost:8000/admin"
 	@echo "  $(GREEN)PostgreSQL:$(NC)       localhost:5432"
 	@echo "  $(GREEN)Redis:$(NC)            localhost:6379"
+	@echo "  $(GREEN)Prometheus:$(NC)       http://localhost:9090"
+	@echo "  $(GREEN)Grafana:$(NC)          http://localhost:3001  (admin/admin)"
 
 health: ## Check health of all services
 	@echo "$(BLUE)❤️  Checking service health...$(NC)"
@@ -80,6 +82,10 @@ health: ## Check health of all services
 	@docker compose exec -T db pg_isready -U admin -d moto > /dev/null && echo "$(GREEN)✓ Healthy$(NC)" || echo "$(RED)✗ Down$(NC)"
 	@echo -n "Redis: "
 	@docker compose exec -T redis redis-cli ping > /dev/null && echo "$(GREEN)✓ Healthy$(NC)" || echo "$(RED)✗ Down$(NC)"
+	@echo -n "Prometheus: "
+	@curl -s http://localhost:9090/-/healthy > /dev/null && echo "$(GREEN)✓ Healthy$(NC)" || echo "$(RED)✗ Down$(NC)"
+	@echo -n "Grafana: "
+	@curl -s http://localhost:3001/api/health > /dev/null && echo "$(GREEN)✓ Healthy$(NC)" || echo "$(RED)✗ Down$(NC)"
 
 # ============================================================================
 # Logs
@@ -99,6 +105,12 @@ logs-db: ## Show database logs (follow)
 
 logs-redis: ## Show Redis logs (follow)
 	docker compose logs -f redis
+
+logs-prometheus: ## Show Prometheus logs (follow)
+	docker compose logs -f prometheus
+
+logs-grafana: ## Show Grafana logs (follow)
+	docker compose logs -f grafana
 
 # ============================================================================
 # Shell Access
@@ -323,6 +335,18 @@ open-swagger: ## Open Swagger UI in browser
 	 command -v open > /dev/null && open http://localhost:8000/api/schema/swagger-ui/ || \
 	 echo "$(YELLOW)Please open http://localhost:8000/api/schema/swagger-ui/ manually$(NC)"
 
+open-grafana: ## Open Grafana in browser
+	@echo "$(BLUE)🌐 Opening Grafana...$(NC)"
+	@command -v xdg-open > /dev/null && xdg-open http://localhost:3001 || \
+	 command -v open > /dev/null && open http://localhost:3001 || \
+	 echo "$(YELLOW)Please open http://localhost:3001 manually$(NC)"
+
+open-prometheus: ## Open Prometheus in browser
+	@echo "$(BLUE)🌐 Opening Prometheus...$(NC)"
+	@command -v xdg-open > /dev/null && xdg-open http://localhost:9090 || \
+	 command -v open > /dev/null && open http://localhost:9090 || \
+	 echo "$(YELLOW)Please open http://localhost:9090 manually$(NC)"
+
 watch-frontend: ## Watch frontend bundle size
 	docker compose exec frontend pnpm watch
 
@@ -338,9 +362,10 @@ info: ## Show project information
 	@echo "$(BLUE)║        MOTO System - Development Commands                 ║$(NC)"
 	@echo "$(BLUE)╚═══════════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo "$(GREEN)Backend:$(NC)  Python 3.13 + Django 5.2 LTS + DRF 3.16 + PostgreSQL 17 + Redis 8"
+	@echo "$(GREEN)Backend:$(NC)  Python 3.13 + Django 5.2 LTS + DRF 3.16 + PostgreSQL 18 + Redis 8"
 	@echo "$(GREEN)Frontend:$(NC) React 19, Next.js 16, TypeScript 5, Tailwind CSS 4, pnpm 10.29.3"
-	@echo "$(GREEN)Infra:$(NC)    Docker Compose (db, redis, backend, frontend)"
+	@echo "$(GREEN)Monitor:$(NC)  Prometheus 3.5.1 LTS + Grafana 12.3.3"
+	@echo "$(GREEN)Infra:$(NC)    Docker Compose (8 services)"
 	@echo "$(GREEN)Packages:$(NC) Poetry (backend) + pnpm (frontend)"
 	@echo ""
 	@$(MAKE) --no-print-directory status

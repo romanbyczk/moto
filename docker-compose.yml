@@ -18,6 +18,7 @@ services:
       retries: 5
     networks:
       - backend-network
+      - monitoring-network
 
   # Redis 8 (Cache)
   redis:
@@ -40,6 +41,7 @@ services:
       retries: 5
     networks:
       - backend-network
+      - monitoring-network
 
   # Django Backend (Python 3.13 + Poetry)
   backend:
@@ -64,6 +66,7 @@ services:
     networks:
       - backend-network
       - frontend-network
+      - monitoring-network
 
   # React 19 Next.js 16 Frontend (pnpm)
   frontend:
@@ -83,12 +86,102 @@ services:
     networks:
       - frontend-network
 
+  # ============================================================================
+  # Monitoring Stack
+  # ============================================================================
+
+  # Prometheus (Metrics TSDB)
+  prometheus:
+    image: prom/prometheus:v3.5.1
+    container_name: moto-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.size=5GB"
+      - "--storage.tsdb.wal-compression"
+      - "--web.enable-lifecycle"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
+  # Grafana (Dashboards & Visualization)
+  grafana:
+    image: grafana/grafana:12.3.3
+    container_name: moto-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
+  # PostgreSQL Exporter
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.19.0
+    container_name: moto-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://admin:admin123@db:5432/moto?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.81.0
+    container_name: moto-redis-exporter
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   backend-network:
     driver: bridge
   frontend-network:
+    driver: bridge
+  monitoring-network:
     driver: bridge

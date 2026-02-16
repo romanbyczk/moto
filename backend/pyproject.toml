@@ -17,6 +17,9 @@ psycopg = {version = "~3.3", extras = ["binary"]}
 # Cache
 django-redis = "~5.4"
 
+# Monitoring
+django-prometheus = "~2.4"
+
 # Django ecosystem
 django-cors-headers = "~4.9"
 django-filter = ">=25.2"
@@ -145,6 +148,7 @@ ignore_missing_imports = false
 module = [
     "celery.*",
     "django_filters.*",
+    "django_prometheus.*",
     "environ",
     "environ.*",
     "factory.*",

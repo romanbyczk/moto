@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Pre-commit hook: runs quality checks and CI tests before allowing a commit.
+# Install with: make install-hooks
+# =============================================================================
+set -euo pipefail
+
+# ── Colours (disabled when stdout is not a terminal) ────────────────────────
+if [ -t 1 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE='' NC=''
+fi
+
+divider() {
+    printf '%b──────────────────────────────────────────────────────────%b\n' "$BLUE" "$NC"
+}
+
+# ── Allow bypassing in emergencies ──────────────────────────────────────────
+if [ "${SKIP_HOOKS:-0}" = "1" ]; then
+    printf '%b⚠  SKIP_HOOKS is set — skipping pre-commit checks%b\n' "$YELLOW" "$NC"
+    exit 0
+fi
+
+# ── Stash unstaged changes so we test only what is being committed ──────────
+STASH_NAME="pre-commit-$(date +%s)"
+if git stash push -q --keep-index -m "$STASH_NAME" 2>/dev/null; then
+    STASHED=1
+else
+    STASHED=0
+fi
+
+restore_stash() {
+    if [ "${STASHED:-0}" = "1" ]; then
+        git stash pop -q 2>/dev/null || true
+    fi
+}
+trap restore_stash EXIT
+
+# ── Run checks ──────────────────────────────────────────────────────────────
+divider
+printf '%b pre-commit hook%b\n' "$BLUE" "$NC"
+divider
+
+FAILED=0
+
+printf '\n%b[1/2] make check%b — format, lint, type-check, test\n' "$YELLOW" "$NC"
+divider
+if make check; then
+    printf '%b  ✓  make check passed%b\n' "$GREEN" "$NC"
+else
+    printf '%b  ✗  make check failed%b\n' "$RED" "$NC"
+    FAILED=1
+fi
+
+printf '\n%b[2/2] make ci-test%b — CI pipeline tests\n' "$YELLOW" "$NC"
+divider
+if make ci-test; then
+    printf '%b  ✓  make ci-test passed%b\n' "$GREEN" "$NC"
+else
+    printf '%b  ✗  make ci-test failed%b\n' "$RED" "$NC"
+    FAILED=1
+fi
+
+# ── Summary ─────────────────────────────────────────────────────────────────
+divider
+if [ "$FAILED" -ne 0 ]; then
+    printf '%b COMMIT REJECTED — fix the errors above and try again.%b\n' "$RED" "$NC"
+    printf '%bTip: run SKIP_HOOKS=1 git commit to bypass (use sparingly).%b\n' "$YELLOW" "$NC"
+    exit 1
+fi
+
+printf '%b All checks passed — committing.%b\n' "$GREEN" "$NC"
+exit 0

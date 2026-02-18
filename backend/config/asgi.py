@@ -1,5 +1,5 @@
 """
-ASGI config for vehicle telemetry project.
+ASGI config for moto project.
 """
 
 import os

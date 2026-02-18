@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend-checks:
+    name: Backend - Lint, Type Check, Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: moto
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: admin123
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d moto"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: pip install poetry==2.1.3
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: ${{ runner.os }}-poetry-${{ hashFiles('backend/poetry.lock') }}
+          restore-keys: ${{ runner.os }}-poetry-
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Ruff format check
+        run: poetry run ruff format --check .
+
+      - name: Ruff lint
+        run: poetry run ruff check .
+
+      - name: Mypy type check
+        run: poetry run mypy .
+
+      - name: Run tests with coverage
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: django-insecure-ci-test-key
+          DEBUG: "True"
+          ALLOWED_HOSTS: "*"
+          DATABASE_URL: postgres://admin:admin123@localhost:5432/moto
+          REDIS_URL: redis://localhost:6379/0
+        run: poetry run pytest --cov --cov-fail-under=85
+
+  frontend-checks:
+    name: Frontend - Lint, Type Check, Test
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@10.29.3 --activate
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: TypeScript check
+        run: pnpm exec tsc --noEmit
+
+      - name: Run tests
+        run: pnpm test:ci

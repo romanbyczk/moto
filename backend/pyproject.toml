@@ -30,6 +30,9 @@ drf-spectacular = "~0.29"
 # WSGI server
 gunicorn = ">=25.0"
 
+# Static files
+whitenoise = "~6.9"
+
 # Data validation
 pydantic = "~2.12"
 
@@ -146,9 +149,10 @@ ignore_missing_imports = false
 
 [[tool.mypy.overrides]]
 module = [
-    "celery.*",
     "django_filters.*",
     "django_prometheus.*",
+    "whitenoise",
+    "whitenoise.*",
     "environ",
     "environ.*",
     "factory.*",

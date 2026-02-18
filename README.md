@@ -26,8 +26,10 @@
 
 ### Infrastructure
 
-- **Docker** & **Docker Compose**
-- 8 Services: PostgreSQL, Redis, Django Backend, Next.js Frontend, Prometheus, Grafana, PostgreSQL Exporter, Redis Exporter
+- **Docker** & **Docker Compose** (local development)
+- **Kubernetes** (AKS) — production orchestration with HPA, network policies, ingress
+- **Terraform** (Azure) — AKS cluster, ACR, PostgreSQL Flexible Server, Redis Cache, VNet
+- **GitHub Actions** — CI pipeline (lint, type check, test) + CD pipeline (build, push, deploy to AKS)
 
 ## Project Structure
 
@@ -50,7 +52,25 @@
 │       └── provisioning/    # Auto-provisioned datasources & dashboards
 │           ├── datasources/
 │           └── dashboards/
-├── docker-compose.yml       # Multi-container orchestration
+├── k8s/                    # Kubernetes manifests (AKS)
+│   ├── namespace.yaml
+│   ├── network-policies.yaml
+│   ├── secrets.yaml.template
+│   ├── backend/             # Deployment, Service, HPA
+│   ├── frontend/            # Deployment, Service, HPA
+│   ├── ingress/             # Ingress rules
+│   └── monitoring/          # Prometheus, Grafana, exporters
+├── terraform/               # Azure infrastructure (IaC)
+│   ├── main.tf              # AKS, ACR, Resource Group
+│   ├── network.tf           # VNet & subnets
+│   ├── database.tf          # PostgreSQL Flexible Server
+│   ├── redis.tf             # Azure Cache for Redis
+│   ├── variables.tf
+│   └── outputs.tf
+├── .github/workflows/       # CI/CD pipelines
+│   ├── ci.yml               # Lint, type check, test (PR)
+│   └── deploy.yml           # Build, push, deploy to AKS (merge)
+├── docker-compose.yml       # Local development orchestration
 ├── Makefile                 # Development commands
 ├── .env.example             # Environment variables template
 └── README.md
@@ -62,7 +82,28 @@
 
 - **Docker** & **Docker Compose**
 - **Make** (optional, but recommended)
-- **Python 3.13** & **Node.js 24**
+
+For cloud deployment, additional tools are required:
+
+- **Azure CLI** (`az`)
+- **Terraform** (>= 1.5)
+- **kubectl**
+- **Helm**
+
+Optional validation tools (recommended):
+
+- **kubeconform** — K8s manifest schema validation
+- **kube-linter** — K8s best-practice linting
+- **tflint** — Terraform linting
+- **trivy** — security scanning
+
+```bash
+# Check which tools are installed
+make check-tools
+
+# Install all required + optional tools (Ubuntu/Debian)
+make install-tools
+```
 
 ### Using Makefile
 
@@ -104,6 +145,28 @@ make logs-grafana    # Follow Grafana logs
 make down            # Stop all services
 make clean           # Stop + remove volumes
 make prune           # Clean Docker resources
+```
+
+### Validation & Linting
+
+Run validations locally without cloud credentials:
+
+```bash
+make validate        # Terraform fmt/validate + K8s manifest validation
+make validate-all    # Above + tflint, trivy, kube-linter
+```
+
+Individual targets:
+
+```bash
+# Terraform
+make tf-validate     # Format check + terraform validate
+make tf-fmt          # Auto-format Terraform files
+make tf-lint         # tflint + trivy security scan
+
+# Kubernetes
+make k8s-validate    # kubeconform (or kubectl dry-run fallback)
+make k8s-lint        # kube-linter best-practice checks
 ```
 
 ## Services
@@ -158,3 +221,105 @@ make prune           # Clean Docker resources
 
 - **Port**: 9121
 - **Metrics**: Memory, clients, hit/miss ratio, commands/sec
+
+## CI/CD
+
+### CI Pipeline (Pull Requests)
+
+Runs on every PR to `main`/`master`:
+
+- **Backend**: Ruff format & lint, Mypy type check, Pytest with coverage (≥85%)
+- **Frontend**: ESLint, TypeScript check, tests
+
+### CD Pipeline (Deploy to AKS)
+
+Runs on merge to `main`/`master`:
+
+1. Build & push Docker images to Azure Container Registry
+2. Create/update Kubernetes secrets
+3. Apply all K8s manifests with image tag substitution
+4. Run database migrations (as a K8s Job)
+5. Verify deployment rollout
+
+## Kubernetes (AKS)
+
+Production deployment on Azure Kubernetes Service:
+
+- **Namespace**: `moto` with network policies for traffic isolation
+- **Backend**: Deployment + Service + HPA (auto-scaling)
+- **Frontend**: Deployment + Service + HPA (auto-scaling)
+- **Ingress**: NGINX-based routing to backend/frontend
+- **Monitoring**: Full Prometheus + Grafana stack with exporters
+- **Secrets**: Managed via `secrets.yaml.template` (populated in CI/CD)
+
+## Terraform (Azure Infrastructure)
+
+Infrastructure as Code for the Azure environment:
+
+| Resource | Description |
+|---|---|
+| Resource Group | `moto-prod-rg` |
+| AKS Cluster | 2–4 nodes (`Standard_D2s_v3`), autoscaling, Azure CNI |
+| Container Registry | ACR for Docker images |
+| PostgreSQL | Flexible Server (v16, 32GB storage) |
+| Redis | Azure Cache for Redis (Basic C1) |
+| VNet | Dedicated subnets for AKS, PostgreSQL, Redis |
+
+```bash
+# Validate locally (no credentials needed)
+make tf-validate
+
+# Deploy infrastructure
+make az-login        # Authenticate with Azure
+make tf-init         # Initialize Terraform backend
+make tf-plan         # Review planned changes
+make tf-apply        # Apply changes
+make tf-output       # Show resource connection details
+```
+
+## Deployment
+
+### Full Workflow
+
+The `deploy` target runs the entire pipeline end-to-end:
+
+```bash
+make deploy
+```
+
+This will: check tools → validate configs → `terraform init` → `terraform plan` → prompt for confirmation → `terraform apply` → build production Docker images → configure kubectl for AKS → deploy all K8s manifests.
+
+### Step-by-Step
+
+```bash
+# 1. Install tools & authenticate
+make install-tools
+make az-login
+
+# 2. Validate everything
+make validate-all
+
+# 3. Provision infrastructure
+make tf-init
+make tf-plan
+make tf-apply
+
+# 4. Build & deploy
+make docker-build-prod
+make aks-credentials
+make aks-deploy
+
+# 5. Verify
+make aks-status
+make aks-port-forward-grafana
+```
+
+### AKS Management
+
+```bash
+make aks-status                  # Show all resources in moto namespace
+make aks-logs-backend            # Tail backend pod logs
+make aks-logs-frontend           # Tail frontend pod logs
+make aks-port-forward-grafana    # Grafana at localhost:3001
+make aks-port-forward-prometheus # Prometheus at localhost:9090
+```

@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: moto-admin-ingress
+  namespace: moto
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Restrict admin access to specific IP ranges
+    nginx.ingress.kubernetes.io/whitelist-source-range: "ADMIN_IP_CIDR_PLACEHOLDER"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - DOMAIN_PLACEHOLDER
+      secretName: moto-tls-secret
+  rules:
+    - host: DOMAIN_PLACEHOLDER
+      http:
+        paths:
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 8000

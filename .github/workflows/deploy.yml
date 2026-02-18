@@ -1,0 +1,122 @@
+name: Deploy to AKS
+
+on:
+  push:
+    branches: [main, master]
+
+env:
+  ACR_NAME: motoprodacr
+  AKS_CLUSTER: moto-prod-aks
+  RESOURCE_GROUP: moto-prod-rg
+  NAMESPACE: moto
+
+jobs:
+  build-and-deploy:
+    name: Build, Push, Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Set image tag
+        id: tag
+        run: echo "TAG=$(echo $GITHUB_SHA | head -c 7)" >> $GITHUB_OUTPUT
+
+      - name: Build and push backend image
+        run: |
+          docker build \
+            --target production \
+            --tag ${{ env.ACR_NAME }}.azurecr.io/moto-backend:${{ steps.tag.outputs.TAG }} \
+            --tag ${{ env.ACR_NAME }}.azurecr.io/moto-backend:latest \
+            ./backend
+          docker push ${{ env.ACR_NAME }}.azurecr.io/moto-backend:${{ steps.tag.outputs.TAG }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/moto-backend:latest
+
+      - name: Build and push frontend image
+        run: |
+          docker build \
+            --target production \
+            --build-arg API_URL=https://${{ secrets.DOMAIN_NAME }} \
+            --tag ${{ env.ACR_NAME }}.azurecr.io/moto-frontend:${{ steps.tag.outputs.TAG }} \
+            --tag ${{ env.ACR_NAME }}.azurecr.io/moto-frontend:latest \
+            ./frontend
+          docker push ${{ env.ACR_NAME }}.azurecr.io/moto-frontend:${{ steps.tag.outputs.TAG }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/moto-frontend:latest
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER }}
+
+      - name: Create namespace if not exists
+        run: kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create/update secrets
+        run: |
+          kubectl create secret generic moto-secrets \
+            --namespace=${{ env.NAMESPACE }} \
+            --from-literal=SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}" \
+            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            --from-literal=REDIS_URL="${{ secrets.REDIS_URL }}" \
+            --from-literal=POSTGRES_EXPORTER_DSN="${{ secrets.POSTGRES_EXPORTER_DSN }}" \
+            --from-literal=GRAFANA_ADMIN_PASSWORD="${{ secrets.GRAFANA_ADMIN_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Generate Grafana dashboards ConfigMap
+        run: |
+          kubectl create configmap grafana-dashboards \
+            --namespace=${{ env.NAMESPACE }} \
+            --from-file=monitoring/grafana/provisioning/dashboards/json/ \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply Kubernetes manifests
+        run: |
+          export ACR_LOGIN_SERVER="${{ env.ACR_NAME }}.azurecr.io"
+          export IMAGE_TAG="${{ steps.tag.outputs.TAG }}"
+          export DOMAIN="${{ secrets.DOMAIN_NAME }}"
+
+          for file in $(find k8s/ -name '*.yaml' -not -name '*.template' | sort); do
+            sed -e "s|ACR_LOGIN_SERVER|${ACR_LOGIN_SERVER}|g" \
+                -e "s|DOMAIN_PLACEHOLDER|${DOMAIN}|g" \
+                -e "s|:latest|:${IMAGE_TAG}|g" \
+                "$file" | kubectl apply -f -
+          done
+
+      - name: Run database migrations
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: migrations-${{ steps.tag.outputs.TAG }}
+            namespace: ${{ env.NAMESPACE }}
+          spec:
+            backoffLimit: 3
+            ttlSecondsAfterFinished: 300
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: migrations
+                    image: ${{ env.ACR_NAME }}.azurecr.io/moto-backend:${{ steps.tag.outputs.TAG }}
+                    command: ["python", "manage.py", "migrate", "--noinput"]
+                    envFrom:
+                      - secretRef:
+                          name: moto-secrets
+          EOF
+          kubectl wait --for=condition=complete --timeout=120s \
+            job/migrations-${{ steps.tag.outputs.TAG }} -n ${{ env.NAMESPACE }}
+
+      - name: Verify deployment rollout
+        run: |
+          kubectl rollout status deployment/backend -n ${{ env.NAMESPACE }} --timeout=120s
+          kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }} --timeout=120s

@@ -1,5 +1,5 @@
 """
-WSGI config for vehicle telemetry project.
+WSGI config for moto project.
 """
 
 import os

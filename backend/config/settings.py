@@ -9,17 +9,16 @@ import environ
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# django-environ: read .env file and environment variables
+# django-environ: read .env file (if present) and environment variables
 env = environ.Env(
-    DEBUG=(bool, True),
-    ALLOWED_HOSTS=(list, ["*"]),
+    DEBUG=(bool, False),
+    ALLOWED_HOSTS=(list, []),
 )
-environ.Env.read_env(BASE_DIR / ".env", overwrite=False)
+env_file = BASE_DIR / ".env"
+if env_file.is_file():
+    environ.Env.read_env(env_file, overwrite=False)
 
-SECRET_KEY = env(
-    "SECRET_KEY",
-    default="django-insecure-dev-key-change-in-production",
-)
+SECRET_KEY = env("SECRET_KEY")
 
 DEBUG = env("DEBUG")
 
@@ -45,6 +44,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -88,7 +88,7 @@ DATABASES = {
 CACHES = {
     "default": {
         "BACKEND": "django_prometheus.cache.backends.redis.RedisCache",
-        "LOCATION": env("REDIS_URL", default="redis://redis:6379/0"),
+        "LOCATION": env("REDIS_URL", default="redis://:redis123@redis:6379/0"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
@@ -114,16 +114,30 @@ USE_TZ = True
 # Static files
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS
+CSRF_TRUSTED_ORIGINS = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost",
+    ],
+)
+
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS",
     default=[
         "http://localhost:3000",
-        "http://localhost:80",
+        "http://localhost:8000",
         "http://localhost",
     ],
 )
@@ -186,3 +200,21 @@ LOGGING = {
         },
     },
 }
+
+# =============================================================================
+# Production security settings (only when DEBUG=False)
+# =============================================================================
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/$"]
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"
+
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs logs-backend logs-frontend logs-db logs-redis logs-prometheus logs-grafana shell-backend shell-frontend shell-redis migrate makemigrations createsuperuser test test-backend test-frontend clean clean-all ps health check install-hooks uninstall-hooks format lint status seed backup restore open-grafana open-prometheus
+.PHONY: help build up down restart logs logs-backend logs-frontend logs-db logs-redis logs-prometheus logs-grafana shell-backend shell-frontend shell-redis migrate makemigrations createsuperuser test test-backend test-frontend clean clean-all ps health check install-hooks uninstall-hooks format lint status seed backup restore open-grafana open-prometheus check-tools install-tools az-login tf-init tf-plan tf-apply tf-destroy tf-output tf-validate tf-fmt tf-lint k8s-validate k8s-lint aks-credentials aks-deploy aks-status aks-logs-backend aks-logs-frontend aks-port-forward-grafana aks-port-forward-prometheus docker-build-prod deploy
 
 # Colors for output
 BLUE := \033[0;34m
@@ -365,7 +365,277 @@ info: ## Show project information
 	@echo "$(GREEN)Backend:$(NC)  Python 3.13 + Django 5.2 LTS + DRF 3.16 + PostgreSQL 18 + Redis 8"
 	@echo "$(GREEN)Frontend:$(NC) React 19, Next.js 16, TypeScript 5, Tailwind CSS 4, pnpm 10.29.3"
 	@echo "$(GREEN)Monitor:$(NC)  Prometheus 3.5.1 LTS + Grafana 12.3.3"
-	@echo "$(GREEN)Infra:$(NC)    Docker Compose (8 services)"
+	@echo "$(GREEN)Infra:$(NC)    Docker Compose (8 services) / AKS (production)"
 	@echo "$(GREEN)Packages:$(NC) Poetry (backend) + pnpm (frontend)"
 	@echo ""
 	@$(MAKE) --no-print-directory status
+
+# ============================================================================
+# Tools & Prerequisites
+# ============================================================================
+
+check-tools: ## Check if all required tools are installed
+	@echo "$(BLUE)Checking required tools...$(NC)"
+	@MISSING=0; \
+	for tool in az terraform kubectl docker helm; do \
+		if command -v $$tool > /dev/null 2>&1; then \
+			echo "  $(GREEN)✓$(NC) $$tool ($$($$tool version 2>/dev/null | head -1))"; \
+		else \
+			echo "  $(RED)✗$(NC) $$tool - NOT INSTALLED"; \
+			MISSING=1; \
+		fi; \
+	done; \
+	for tool in kubeconform kube-linter tflint trivy; do \
+		if command -v $$tool > /dev/null 2>&1; then \
+			echo "  $(GREEN)✓$(NC) $$tool (optional)"; \
+		else \
+			echo "  $(YELLOW)~$(NC) $$tool - not installed (optional, run make install-tools)"; \
+		fi; \
+	done; \
+	if [ $$MISSING -eq 1 ]; then \
+		echo ""; \
+		echo "$(RED)Required tools missing. Run: make install-tools$(NC)"; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)All required tools installed!$(NC)"
+
+install-tools: ## Install required CLI tools (az, terraform, kubectl, helm, validators)
+	@echo "$(BLUE)Installing tools...$(NC)"
+	@echo ""
+	@# Azure CLI
+	@if ! command -v az > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing Azure CLI...$(NC)"; \
+		curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash; \
+	else \
+		echo "$(GREEN)✓$(NC) Azure CLI already installed"; \
+	fi
+	@# Terraform
+	@if ! command -v terraform > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing Terraform...$(NC)"; \
+		sudo apt-get update && sudo apt-get install -y gnupg software-properties-common; \
+		wget -qO- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null; \
+		echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $$(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list; \
+		sudo apt-get update && sudo apt-get install -y terraform; \
+	else \
+		echo "$(GREEN)✓$(NC) Terraform already installed"; \
+	fi
+	@# kubectl
+	@if ! command -v kubectl > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing kubectl...$(NC)"; \
+		curl -LO "https://dl.k8s.io/release/$$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"; \
+		sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl; \
+		rm -f kubectl; \
+	else \
+		echo "$(GREEN)✓$(NC) kubectl already installed"; \
+	fi
+	@# Helm
+	@if ! command -v helm > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing Helm...$(NC)"; \
+		curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash; \
+	else \
+		echo "$(GREEN)✓$(NC) Helm already installed"; \
+	fi
+	@# kubeconform
+	@if ! command -v kubeconform > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing kubeconform...$(NC)"; \
+		KUBECONFORM_VERSION=$$(curl -sL https://api.github.com/repos/yannh/kubeconform/releases/latest | grep tag_name | cut -d '"' -f 4); \
+		curl -sL "https://github.com/yannh/kubeconform/releases/download/$${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | sudo tar xz -C /usr/local/bin; \
+	else \
+		echo "$(GREEN)✓$(NC) kubeconform already installed"; \
+	fi
+	@# kube-linter
+	@if ! command -v kube-linter > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing kube-linter...$(NC)"; \
+		KUBELINTER_VERSION=$$(curl -sL https://api.github.com/repos/stackrox/kube-linter/releases/latest | grep tag_name | cut -d '"' -f 4); \
+		curl -sL "https://github.com/stackrox/kube-linter/releases/download/$${KUBELINTER_VERSION}/kube-linter-linux" -o /tmp/kube-linter; \
+		sudo install -o root -g root -m 0755 /tmp/kube-linter /usr/local/bin/kube-linter; \
+	else \
+		echo "$(GREEN)✓$(NC) kube-linter already installed"; \
+	fi
+	@# tflint
+	@if ! command -v tflint > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing tflint...$(NC)"; \
+		curl -sL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash; \
+	else \
+		echo "$(GREEN)✓$(NC) tflint already installed"; \
+	fi
+	@# trivy
+	@if ! command -v trivy > /dev/null 2>&1; then \
+		echo "$(YELLOW)Installing trivy...$(NC)"; \
+		sudo apt-get install -y wget apt-transport-https gnupg; \
+		wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null; \
+		echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list; \
+		sudo apt-get update && sudo apt-get install -y trivy; \
+	else \
+		echo "$(GREEN)✓$(NC) trivy already installed"; \
+	fi
+	@echo ""
+	@echo "$(GREEN)All tools installed!$(NC)"
+
+az-login: ## Login to Azure CLI
+	@echo "$(BLUE)Logging in to Azure...$(NC)"
+	az login
+	@echo "$(GREEN)Azure login successful!$(NC)"
+
+# ============================================================================
+# Terraform
+# ============================================================================
+
+tf-validate: ## Validate Terraform configuration (no cloud credentials needed)
+	@echo "$(BLUE)Validating Terraform configuration...$(NC)"
+	cd terraform && terraform fmt -check -diff
+	cd terraform && terraform validate
+	@echo "$(GREEN)Terraform configuration valid!$(NC)"
+
+tf-fmt: ## Format Terraform files
+	@echo "$(BLUE)Formatting Terraform files...$(NC)"
+	cd terraform && terraform fmt -recursive
+	@echo "$(GREEN)Terraform files formatted!$(NC)"
+
+tf-lint: ## Lint Terraform with tflint and trivy
+	@echo "$(BLUE)Linting Terraform...$(NC)"
+	@if command -v tflint > /dev/null 2>&1; then \
+		echo "$(YELLOW)Running tflint...$(NC)"; \
+		cd terraform && tflint --init && tflint; \
+	else \
+		echo "$(YELLOW)tflint not installed, skipping (run make install-tools)$(NC)"; \
+	fi
+	@if command -v trivy > /dev/null 2>&1; then \
+		echo "$(YELLOW)Running trivy security scan...$(NC)"; \
+		trivy config terraform/; \
+	else \
+		echo "$(YELLOW)trivy not installed, skipping (run make install-tools)$(NC)"; \
+	fi
+	@echo "$(GREEN)Terraform lint complete!$(NC)"
+
+tf-init: ## Initialize Terraform
+	@echo "$(BLUE)Initializing Terraform...$(NC)"
+	cd terraform && terraform init
+	@echo "$(GREEN)Terraform initialized!$(NC)"
+
+tf-plan: ## Plan Terraform changes
+	@echo "$(BLUE)Planning Terraform changes...$(NC)"
+	cd terraform && terraform plan -out=tfplan
+	@echo "$(GREEN)Plan complete! Review above.$(NC)"
+
+tf-apply: ## Apply Terraform changes
+	@echo "$(YELLOW)Applying Terraform changes...$(NC)"
+	cd terraform && terraform apply tfplan
+	@echo "$(GREEN)Infrastructure provisioned!$(NC)"
+
+tf-destroy: ## Destroy all Azure infrastructure
+	@echo "$(RED)This will DESTROY all Azure resources!$(NC)"
+	@echo "Press Ctrl+C to cancel, or Enter to continue..."
+	@read confirm
+	cd terraform && terraform destroy
+	@echo "$(GREEN)Infrastructure destroyed.$(NC)"
+
+tf-output: ## Show Terraform outputs
+	cd terraform && terraform output
+
+# ============================================================================
+# Kubernetes Validation
+# ============================================================================
+
+k8s-validate: ## Validate K8s manifests (dry-run + kubeconform)
+	@echo "$(BLUE)Validating Kubernetes manifests...$(NC)"
+	@if command -v kubeconform > /dev/null 2>&1; then \
+		echo "$(YELLOW)Running kubeconform...$(NC)"; \
+		find k8s -name '*.yaml' -not -name 'secrets.yaml.template' | xargs kubeconform -strict -summary -ignore-missing-schemas; \
+	else \
+		echo "$(YELLOW)kubeconform not installed, falling back to kubectl dry-run$(NC)"; \
+		kubectl apply -f k8s/ --dry-run=client --recursive 2>&1 || true; \
+	fi
+	@echo "$(GREEN)K8s validation complete!$(NC)"
+
+k8s-lint: ## Lint K8s manifests with kube-linter
+	@echo "$(BLUE)Linting Kubernetes manifests...$(NC)"
+	@if command -v kube-linter > /dev/null 2>&1; then \
+		kube-linter lint k8s/; \
+	else \
+		echo "$(YELLOW)kube-linter not installed (run make install-tools)$(NC)"; \
+	fi
+	@echo "$(GREEN)K8s lint complete!$(NC)"
+
+# ============================================================================
+# AKS Deployment
+# ============================================================================
+
+aks-credentials: ## Get AKS credentials for kubectl
+	@echo "$(BLUE)Fetching AKS credentials...$(NC)"
+	az aks get-credentials \
+		--resource-group $$(cd terraform && terraform output -raw resource_group_name) \
+		--name $$(cd terraform && terraform output -raw aks_cluster_name) \
+		--overwrite-existing
+	@echo "$(GREEN)kubectl configured for AKS!$(NC)"
+
+aks-deploy: ## Deploy all K8s manifests to AKS
+	@echo "$(BLUE)Deploying to AKS...$(NC)"
+	kubectl apply -f k8s/namespace.yaml
+	kubectl apply -f k8s/network-policies.yaml
+	kubectl apply -f k8s/monitoring/prometheus/
+	kubectl apply -f k8s/monitoring/grafana/
+	kubectl apply -f k8s/monitoring/postgres-exporter/
+	kubectl apply -f k8s/monitoring/redis-exporter/
+	kubectl apply -f k8s/backend/
+	kubectl apply -f k8s/frontend/
+	kubectl apply -f k8s/ingress/
+	@echo "$(GREEN)Deployment complete!$(NC)"
+
+aks-status: ## Show AKS deployment status
+	@echo "$(BLUE)AKS Deployment Status:$(NC)"
+	kubectl get all -n moto
+
+aks-logs-backend: ## Tail backend pod logs
+	kubectl logs -f -l app=backend -n moto
+
+aks-logs-frontend: ## Tail frontend pod logs
+	kubectl logs -f -l app=frontend -n moto
+
+aks-port-forward-grafana: ## Port forward Grafana (localhost:3001)
+	@echo "$(BLUE)Grafana available at http://localhost:3001$(NC)"
+	kubectl port-forward svc/grafana 3001:3000 -n moto
+
+aks-port-forward-prometheus: ## Port forward Prometheus (localhost:9090)
+	@echo "$(BLUE)Prometheus available at http://localhost:9090$(NC)"
+	kubectl port-forward svc/prometheus 9090:9090 -n moto
+
+docker-build-prod: ## Build production Docker images locally
+	@echo "$(BLUE)Building production images...$(NC)"
+	docker build --target production -t moto-backend:prod ./backend
+	docker build --target production -t moto-frontend:prod ./frontend
+	@echo "$(GREEN)Production images built!$(NC)"
+
+# ============================================================================
+# Full Workflows
+# ============================================================================
+
+validate: ## Run all validations (terraform + k8s) without cloud credentials
+	@echo "$(BLUE)Running all validations...$(NC)"
+	@$(MAKE) --no-print-directory tf-validate
+	@$(MAKE) --no-print-directory k8s-validate
+	@echo "$(GREEN)All validations passed!$(NC)"
+
+validate-all: ## Run all validations + linting + security scanning
+	@echo "$(BLUE)Running full validation suite...$(NC)"
+	@$(MAKE) --no-print-directory tf-validate
+	@$(MAKE) --no-print-directory tf-lint
+	@$(MAKE) --no-print-directory k8s-validate
+	@$(MAKE) --no-print-directory k8s-lint
+	@echo "$(GREEN)Full validation suite passed!$(NC)"
+
+deploy: ## Full deployment workflow (validate, plan, apply, deploy to AKS)
+	@echo "$(BLUE)Starting full deployment workflow...$(NC)"
+	@$(MAKE) --no-print-directory check-tools
+	@$(MAKE) --no-print-directory validate
+	@$(MAKE) --no-print-directory tf-init
+	@$(MAKE) --no-print-directory tf-plan
+	@echo "$(YELLOW)Review the plan above. Press Enter to apply, Ctrl+C to cancel.$(NC)"
+	@read confirm
+	@$(MAKE) --no-print-directory tf-apply
+	@$(MAKE) --no-print-directory docker-build-prod
+	@$(MAKE) --no-print-directory aks-credentials
+	@$(MAKE) --no-print-directory aks-deploy
+	@$(MAKE) --no-print-directory aks-status
+	@echo "$(GREEN)Full deployment complete!$(NC)"

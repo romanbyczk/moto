@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Pre-commit hook: runs quality checks and CI tests before allowing a commit.
+# Pre-commit hook: runs lint and type-check before allowing a commit.
 # Install with: make install-hooks
 # =============================================================================
 set -euo pipefail
@@ -48,21 +48,21 @@ divider
 
 FAILED=0
 
-printf '\n%b[1/2] make check%b — format, lint, type-check, test\n' "$YELLOW" "$NC"
+printf '\n%b[1/2] make lint%b — lint checks\n' "$YELLOW" "$NC"
 divider
-if make check; then
-    printf '%b  ✓  make check passed%b\n' "$GREEN" "$NC"
+if make lint; then
+    printf '%b  ✓  lint passed%b\n' "$GREEN" "$NC"
 else
-    printf '%b  ✗  make check failed%b\n' "$RED" "$NC"
+    printf '%b  ✗  lint failed%b\n' "$RED" "$NC"
     FAILED=1
 fi
 
-printf '\n%b[2/2] make ci-test%b — CI pipeline tests\n' "$YELLOW" "$NC"
+printf '\n%b[2/2] make type-check%b — type checking\n' "$YELLOW" "$NC"
 divider
-if make ci-test; then
-    printf '%b  ✓  make ci-test passed%b\n' "$GREEN" "$NC"
+if make type-check; then
+    printf '%b  ✓  type-check passed%b\n' "$GREEN" "$NC"
 else
-    printf '%b  ✗  make ci-test failed%b\n' "$RED" "$NC"
+    printf '%b  ✗  type-check failed%b\n' "$RED" "$NC"
     FAILED=1
 fi
 
